@@ -1,0 +1,131 @@
+import streamlit as st
+import docx
+import openpyxl
+import re
+import io  # Nodig voor in-memory bestandsbewerking
+from pathlib import Path
+from openpyxl.styles import Font
+
+# --- KERNFUNCTIES (Grotendeels ongewijzigd, behalve print() -> st.error()) ---
+
+def haal_tekst_uit_word(uploaded_file):
+    """
+    Haalt alle tekst uit een geüpload .docx-bestand.
+    'uploaded_file' is het object van st.file_uploader.
+    """
+    try:
+        # docx.Document kan direct een file-like object lezen
+        doc = docx.Document(uploaded_file)
+        volledige_tekst = []
+
+        # Haal tekst uit paragrafen
+        for para in doc.paragraphs:
+            volledige_tekst.append(para.text)
+
+        # Haal tekst uit tabellen
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for para in cell.paragraphs:
+                        volledige_tekst.append(para.text)
+                        
+        return "\n".join(volledige_tekst)
+
+    except Exception as e:
+        # Gebruik st.error() voor feedback in de app
+        st.error(f"Fout bij het lezen van het Word-bestand: {e}")
+        return None
+
+def vind_woorden_tussen_haken(tekst):
+    """
+    Vindt alle tekststrings die tussen { } staan met behulp van regex.
+    """
+    patroon = re.compile(r'\{.*?\}', re.DOTALL)
+    gevonden_woorden = re.findall(patroon, tekst)
+    return gevonden_woorden
+
+def maak_excel_bestand(termen_lijst):
+    """
+    Schrijft de gevonden unieke termen naar een Excel-bestand in het geheugen
+    en retourneert dit als een bytes-object.
+    """
+    try:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Gevonden Termen"
+
+        ws["A1"] = "Gevonden Term"
+        ws["A1"].font = Font(bold=True)
+        ws["B1"] = "input"
+        ws["B1"].font = Font(bold=True)
+
+        for index, term in enumerate(termen_lijst, start=2):
+            ws[f"A{index}"] = term
+
+        ws.column_dimensions['A'].width = 50
+        
+        # Maak een in-memory buffer aan
+        output_buffer = io.BytesIO()
+        wb.save(output_buffer)
+        
+        # Ga terug naar het begin van de buffer zodat st.download_button het kan lezen
+        output_buffer.seek(0) 
+        
+        return output_buffer
+
+    except Exception as e:
+        st.error(f"Fout bij het maken van het Excel-bestand: {e}")
+        return None
+
+# --- STREAMLIT APP INTERFACE ---
+
+st.title("Word Termen Extractor 📝")
+st.write("Upload een .docx bestand om alle termen tussen {accolades} te extraheren en te exporteren naar Excel.")
+
+# 1. Bestandsinvoer
+uploaded_file = st.file_uploader("Kies een .docx bestand", type=["docx"])
+
+if uploaded_file is not None:
+    # Als een bestand is geüpload, start het proces
+    st.info(f"1. Bezig met lezen van: {uploaded_file.name}")
+    
+    with st.spinner("Tekst extraheren uit Word-document..."):
+        document_tekst = haal_tekst_uit_word(uploaded_file)
+
+    if document_tekst:
+        st.success("Tekst succesvol geëxtraheerd.")
+        
+        # 2. Termen zoeken
+        with st.spinner("Bezig met zoeken naar termen (inclusief {})..."):
+            gevonden_termen = vind_woorden_tussen_haken(document_tekst)
+        
+        if not gevonden_termen:
+            st.warning("Geen termen tussen {} gevonden in het document.")
+        else:
+            st.info(f"   ... {len(gevonden_termen)} instanties gevonden.")
+
+            # Krijg unieke termen
+            unieke_termen = list(dict.fromkeys(gevonden_termen))
+            st.success(f"   ... {len(unieke_termen)} unieke termen gevonden.")
+
+            # Toon een voorbeeld in de app
+            st.subheader("Gevonden Unieke Termen (voorbeeld):")
+            st.dataframe(unieke_termen, column_config={"value": "Term"}, use_container_width=True)
+
+            # 3. Excel-bestand genereren
+            st.info("3. Bezig met genereren van Excel-bestand...")
+            excel_data = maak_excel_bestand(unieke_termen)
+
+            if excel_data:
+                # Bepaal de bestandsnaam voor de download
+                basis_naam = Path(uploaded_file.name).stem
+                excel_uitvoer_naam = f"{basis_naam}_termen.xlsx"
+
+                # 4. Downloadknop aanbieden
+                st.download_button(
+                    label="Download Excel-bestand",
+                    data=excel_data,
+                    file_name=excel_uitvoer_naam,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                st.success("Verwerking voltooid! Klik hierboven om te downloaden.")
