@@ -1,0 +1,319 @@
+import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from fpdf import FPDF  # Vereist 'fpdf2' in requirements.txt
+import re
+from io import BytesIO
+
+# --- 1. Data Inlezen en Voorbereiden (Aangepast voor Streamlit) ---
+
+def find_csv_metadata_and_header(uploaded_file):
+    """
+    Leest de geüploade CSV. Pakt filternummer uit A1 en vindt de startrij.
+    'uploaded_file' is een in-memory bestandsobject van Streamlit.
+    """
+    filternummer = "Onbekend"
+    header_row_index = 0
+    encodings_to_try = ['utf-8', 'latin-1', 'iso-8859-1']
+    
+    for encoding in encodings_to_try:
+        try:
+            # Zet de 'file pointer' terug naar het begin voor elke poging
+            uploaded_file.seek(0)
+            # Lees de bytes en decodeer ze
+            content = uploaded_file.read().decode(encoding)
+            lines = content.splitlines()
+
+            # 1. Lees de EERSTE regel voor het filternummer
+            if lines:
+                first_line = lines[0]
+                parts = first_line.split(';')
+                if parts:
+                    filternummer = parts[0].strip()
+
+                # Controleer of de header al op de eerste regel stond
+                if first_line.strip().startswith('datum;meting NAP;'):
+                    header_row_index = 0
+                    return filternummer, header_row_index
+
+            # Zoek verder naar de header vanaf de tweede regel (index 1)
+            for i, line in enumerate(lines, start=0):
+                line_stripped = line.strip()
+                if line_stripped.startswith('datum;meting NAP;'):
+                    header_row_index = i
+                    return filternummer, header_row_index
+        
+        except UnicodeDecodeError:
+            continue 
+        except Exception as e:
+            st.warning(f"Fout bij lezen metadata ({encoding}): {e}")
+            
+    st.error(f"Kritieke fout: Kon header 'datum;meting NAP;' niet vinden.")
+    return filternummer, 0 # Fallback
+
+def laad_en_prepareer_data(uploaded_file, skiprows):
+    """
+    Laadt de specifieke CSV, ruimt op en converteert datum.
+    'uploaded_file' is een in-memory bestandsobject van Streamlit.
+    """
+    try:
+        # Belangrijk: zet pointer terug voordat Pandas leest
+        uploaded_file.seek(0)
+        
+        df = pd.read_csv(uploaded_file, delimiter=';', skiprows=skiprows, decimal=',', encoding='latin-1')
+        
+        df.columns = df.columns.str.replace(';', '', regex=False)
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+        
+        if 'datum' in df.columns:
+            df['datum'] = df['datum'].astype(str).str.strip()
+        
+        df['datum'] = pd.to_datetime(df['datum'], format='%Y-%m-%d %H:%M')
+        df = df.dropna(subset=['meting NAP'])
+        df = df.sort_values(by='datum').reset_index(drop=True)
+        
+        st.success(f"Data succesvol geladen: {len(df)} metingen.")
+        return df
+    except Exception as e:
+        st.error(f"Fout bij laden van data: {e}")
+        return None
+
+# --- 2. GHG/GLG Berekening (Ongewijzigd) ---
+
+def bereken_ghg_glg_proxy(df):
+    """
+    Berekent de GHG en GLG op basis van de beschikbare data.
+    """
+    if df is None or df.empty:
+        return None, None, None, None
+        
+    st.info("Starten: Berekening GHG & GLG (Proxy)...")
+    
+    df['hydrologisch_jaar'] = df['datum'].dt.year.where(df['datum'].dt.month >= 4, df['datum'].dt.year - 1)
+    
+    yearly_min = df.groupby('hydrologisch_jaar')['meting NAP'].min()
+    yearly_max = df.groupby('hydrologisch_jaar')['meting NAP'].max()
+    
+    all_years = sorted(df['hydrologisch_jaar'].unique())
+    
+    if len(all_years) <= 2:
+        ref_years = all_years
+        st.warning(f"Waarschuwing: Minder dan 3 hydr. jaren data. Gemiddelde is gebaseerd op alle jaren: {ref_years}")
+    else:
+        ref_years = all_years[1:-1]
+        st.info(f"Referentiejaren voor gemiddelde: {ref_years}")
+        
+    if not ref_years:
+        st.error("Fout: Geen referentiejaren gevonden. Mogelijk te weinig data.")
+        return None, None, None, None
+
+    ref_period_min = yearly_min.loc[ref_years]
+    ref_period_max = yearly_max.loc[ref_years]
+    
+    glg = ref_period_min.mean()
+    ghg = ref_period_max.mean()
+    
+    st.write(f"Berekende GLG (proxy): **{glg:.2f} m +NAP**")
+    st.write(f"Berekende GHG (proxy): **{ghg:.2f} m +NAP**")
+    
+    return ghg, glg, ref_period_max, ref_period_min
+
+# --- 3. Grafiek Maken (Aangepast voor Streamlit) ---
+
+def maak_grafiek(df, ghg, glg, aantal_metingen):
+    """
+    Maakt een Matplotlib-figuur en een in-memory afbeelding (BytesIO).
+    """
+    if df is None:
+        return None, None
+        
+    st.info("Grafiek genereren...")
+    
+    # Maak de figuur
+    fig = plt.figure(figsize=(10.5, 6))
+    
+    plt.plot(df['datum'], df['meting NAP'], marker='o', markersize=4, linestyle='-', label='Waterstand (NAP+m)')
+    
+    if ghg is not None and glg is not None:
+        plt.axhline(y=ghg, color='red', linestyle='--', label=f'GHG (proxy) (NAP{ghg:.2f} m)')
+        plt.axhline(y=glg, color='blue', linestyle='--', label=f'GLG (proxy) (NAP{glg:.2f} m)')
+
+    plt.title(f'Waterstanden (n={aantal_metingen})')
+    plt.xlabel('Datum')
+    plt.ylabel('Waterstand (NAP+m)')
+    plt.legend(loc='best')
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+    
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+    plt.gca().xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=10))
+    plt.gcf().autofmt_xdate()
+    
+    plt.tight_layout()
+    
+    # Sla de grafiek op in een in-memory buffer i.p.v. een bestand
+    img_buffer = BytesIO()
+    plt.savefig(img_buffer, format='png', dpi=300)
+    img_buffer.seek(0)
+    
+    # plt.close(fig) # Normaal gesproken goed, maar st.pyplot() wil de 'fig'
+    
+    st.success("Grafiek succesvol gegenereerd.")
+    # Geef de figuur (voor st.pyplot) en de buffer (voor PDF) terug
+    return fig, img_buffer
+
+# --- 4. PDF Rapport Maken (Aangepast voor Streamlit) ---
+
+class PDF(FPDF):
+    def header(self):
+        self.set_font('Helvetica', 'B', 16) 
+        try:
+            # Probeer encoding te fixen voor speciale tekens in PDF
+            filternummer_encoded = self.filternummer.encode('latin-1', 'replace').decode('latin-1')
+        except:
+            filternummer_encoded = self.filternummer # Fallback
+        self.cell(0, 10, f'Waterstanden peilfilter: {filternummer_encoded}', 0, 1, 'C')
+        self.ln(5)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Helvetica', 'I', 8)
+        self.cell(0, 10, f'Pagina {self.page_no()}', 0, 0, 'C')
+
+def maak_pdf_rapport(plot_image_buffer, filternummer, ghg, glg, yearly_max, yearly_min):
+    """
+    Maakt het A4 PDF rapport en retourneert de bytes.
+    'plot_image_buffer' is de BytesIO van de grafiek.
+    """
+    st.info("PDF-rapport genereren...")
+    pdf = PDF(orientation='P', unit='mm', format='A4')
+    pdf.filternummer = filternummer
+    pdf.add_page()
+    
+    if plot_image_buffer:
+        # Gebruik de in-memory afbeelding
+        pdf.image(plot_image_buffer, x=10, y=None, w=190, type='PNG')
+    else:
+        pdf.set_font('Helvetica', 'B', 12)
+        pdf.cell(0, 10, 'Fout: Kon grafiek niet laden.', 0, 1, 'C')
+        
+    pdf.ln(10)
+    
+    pdf.set_font('Helvetica', 'B', 12)
+    pdf.cell(0, 10, 'Jaarlijkse Hoogste en Laagste Standen (Referentieperiode)', 0, 1)
+    
+    pdf.set_font('Helvetica', 'B', 10)
+    pdf.set_fill_color(230, 230, 230)
+    col_width = 63
+    pdf.cell(col_width, 8, 'Hydrologisch Jaar', 1, 0, 'C', True)
+    pdf.cell(col_width, 8, 'Hoogste Stand (m)', 1, 0, 'C', True)
+    pdf.cell(col_width, 8, 'Laagste Stand (m)', 1, 0, 'C', True)
+    pdf.ln()
+    
+    pdf.set_font('Helvetica', '', 10)
+    if yearly_max is not None and yearly_min is not None:
+        for year in yearly_max.index:
+            pdf.cell(col_width, 7, str(year), 1, 0, 'C')
+            pdf.cell(col_width, 7, f"{yearly_max.loc[year]:.2f}", 1, 0, 'C')
+            if year in yearly_min.index:
+                pdf.cell(col_width, 7, f"{yearly_min.loc[year]:.2f}", 1, 1, 'C')
+            else:
+                pdf.cell(col_width, 7, "-", 1, 1, 'C')
+                
+        pdf.ln(5)
+        pdf.set_font('Helvetica', 'B', 11)
+        pdf.cell(col_width, 8, 'Berekend Gemiddelde', 1, 0, 'C', True)
+        pdf.cell(col_width, 8, f'GHG (proxy): {ghg:.2f} m', 1, 0, 'C')
+        pdf.cell(col_width, 8, f'GLG (proxy): {glg:.2f} m', 1, 1, 'C')
+    else:
+        pdf.cell(0, 10, 'Geen data beschikbaar voor tabel.', 1, 1, 'C')
+
+    st.success("PDF-rapport succesvol gegenereerd.")
+    # Retourneer de PDF als bytes
+    return pdf.output(dest='S').encode('latin-1')
+
+# --- 5. Hoofdscript (Streamlit App) ---
+
+def main_app():
+    st.set_page_config(page_title="Waterstand Analyse", layout="wide")
+    st.title("Waterstand Analyse en Rapportage")
+
+    # File uploader
+    uploaded_file = st.file_uploader("Kies een CSV-bestand", type=["csv"])
+
+    if uploaded_file is not None:
+        try:
+            st.info(f"Bestand '{uploaded_file.name}' wordt verwerkt...")
+            
+            # --- 1. Metadata ---
+            filternummer, data_start_row = find_csv_metadata_and_header(uploaded_file)
+            st.header(f"Peilfilter: {filternummer}")
+            st.caption(f"Data start op rij {data_start_row + 1}")
+
+            # --- 2. Data laden ---
+            df = laad_en_prepareer_data(uploaded_file, skiprows=data_start_row)
+            
+            if df is None or df.empty:
+                st.error("Data kon niet geladen worden. Controleer het bestandsformaat.")
+                st.stop() # Stop de uitvoering als data laden mislukt
+
+            # --- 3. NIEUWE FUNCTIE: Hoogste/Laagste stand ---
+            st.subheader("Hoogste en Laagste Gemeten Standen (Totaal)")
+            
+            # Vind de max/min waarden en hun datums
+            hoogste_stand = df['meting NAP'].max()
+            laagste_stand = df['meting NAP'].min()
+            hoogste_datum = df.loc[df['meting NAP'].idxmax(), 'datum']
+            laagste_datum = df.loc[df['meting NAP'].idxmin(), 'datum']
+
+            col1, col2 = st.columns(2)
+            col1.metric("Hoogst Gemeten Stand", 
+                        f"{hoogste_stand:.2f} m", 
+                        f"op {hoogste_datum.strftime('%Y-%m-%d')}")
+            col2.metric("Laagst Gemeten Stand", 
+                        f"{laagste_stand:.2f} m", 
+                        f"op {laagste_datum.strftime('%Y-%m-%d')}")
+
+            # --- 4. GHG/GLG Berekening ---
+            st.subheader("GHG/GLG Analyse")
+            ghg, glg, yearly_max_table, yearly_min_table = bereken_ghg_glg_proxy(df)
+
+            # --- 5. Grafiek maken en tonen ---
+            st.subheader("Grafiek Waterstanden")
+            aantal_metingen = len(df)
+            fig, img_buffer = maak_grafiek(df, ghg, glg, aantal_metingen)
+            
+            if fig:
+                st.pyplot(fig)
+            else:
+                st.error("Kon de grafiek niet genereren.")
+
+            # --- 6. PDF genereren en downloadknop tonen ---
+            st.subheader("Rapport Downloaden")
+            if ghg is not None: # Alleen PDF maken als berekening is gelukt
+                pdf_bytes = maak_pdf_rapport(img_buffer, filternummer, ghg, glg, yearly_max_table, yearly_min_table)
+                
+                # Maak een nette bestandsnaam
+                pdf_filename = f"{re.sub(r'[^a-zA-Z0-9_-]', '', filternummer)}_rapport.pdf"
+                
+                st.download_button(
+                    label="Download PDF Rapport",
+                    data=pdf_bytes,
+                    file_name=pdf_filename,
+                    mime="application/pdf"
+                )
+            else:
+                st.warning("Kon geen PDF genereren, omdat de GHG/GLG berekening is mislukt.")
+
+            # --- 7. Opruimen ---
+            if img_buffer:
+                img_buffer.close()
+
+        except Exception as e:
+            st.error(f"Er is een onverwachte fout opgetreden: {e}")
+            import traceback
+            st.exception(traceback.format_exc())
+
+# --- Uitvoering ---
+if __name__ == "__main__":
+    main_app()
