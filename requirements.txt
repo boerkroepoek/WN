@@ -1,3 +1,6 @@
 streamlit
 reportlab
 PyPDF2
+pandas
+matplotlib
+fpdf2
