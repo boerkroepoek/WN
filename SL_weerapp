@@ -1,0 +1,85 @@
+import streamlit as st
+import requests
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+
+# 1. Pagina configuratie
+st.set_page_config(page_title="Weersverwachting App", page_icon="🌤️")
+
+st.title("🌤️ Weersverwachting")
+
+# 2. Input voor API Key en Locatie
+# In productie zou je de API key uit st.secrets halen, maar voor nu maken we een invulveld.
+with st.sidebar:
+    st.header("Instellingen")
+    api_key = st.text_input("OpenWeatherMap API Key", type="password", help="Plak hier je API key")
+    
+locatie = st.text_input("Locatie:", value="Amsterdam")
+
+# Functie om data op te halen (gecached om de API niet te spammen bij elke klik)
+@st.cache_data(ttl=600) # Data wordt 10 minuten bewaard
+def haal_weer_data_op(locatie, api_key):
+    api_url = f'http://api.openweathermap.org/data/2.5/forecast?q={locatie}&units=metric&appid={api_key}'
+    return requests.get(api_url)
+
+# 3. Logica uitvoeren alleen als er inputs zijn
+if locatie and api_key:
+    # Ophalen gegevens
+    resultaat = haal_weer_data_op(locatie, api_key)
+
+    # Check status
+    if resultaat.status_code == 200:
+        data = resultaat.json()
+        
+        # Omzetten naar DataFrame
+        df_weer = pd.json_normalize(data['list'])
+
+        # --- FIX VOOR JOUW DATUM PROBLEEM ---
+        # Je gebruikte 'dt_txt' (string) voor de plot. Matplotlib kan strings niet formatteren met DateFormatter.
+        # We moeten zorgen dat de kolom echt een 'datetime' object is.
+        df_weer['datetime'] = pd.to_datetime(df_weer['dt_txt'])
+        
+        # Temperatuur zeker weten numeric maken
+        df_weer['main.temp'] = pd.to_numeric(df_weer['main.temp'], errors='coerce')
+
+        # 4. De Grafiek (Matplotlib)
+        # In Streamlit gebruiken we 'fig' en 'ax' expliciet
+        fig, ax = plt.subplots(figsize=(10, 5))
+        
+        # Plot de datetime objecten (x) tegen de temperatuur (y)
+        ax.plot(df_weer['datetime'], df_weer['main.temp'], marker='o', linestyle='-', color='orange')
+
+        # Assen formatteren
+        ax.set_ylabel('Temperatuur [°C]')
+        ax.set_xlabel('Datum & Tijd')
+        ax.set_title(f'Verwachting voor {locatie.capitalize()}')
+        
+        # Grid toevoegen voor leesbaarheid
+        ax.grid(True, linestyle='--', alpha=0.6)
+
+        # --- HIER WERKT DE FORMATTER NU WEL ---
+        # Omdat de x-as nu datetime objecten bevat, snapt mdates wat hij moet doen.
+        mijn_formaat = mdates.DateFormatter('%H:%M\n%d-%m') 
+        ax.xaxis.set_major_formatter(mijn_formaat)
+        
+        # Zorgt dat de labels niet overlappen
+        plt.xticks(rotation=0) 
+        
+        # Toon de plot in Streamlit
+        st.pyplot(fig)
+
+        # 5. Extra: Ruwe data tonen in een uitklapmenu
+        with st.expander("Bekijk ruwe data"):
+            st.dataframe(df_weer[['dt_txt', 'main.temp', 'weather']].head(10))
+            st.json(data)
+
+    elif resultaat.status_code == 401:
+        st.error("De API sleutel is onjuist. Controleer je key.")
+    elif resultaat.status_code == 404:
+        st.error(f"Locatie '{locatie}' niet gevonden. Probeer een andere stad.")
+    else:
+        st.error(f"Er ging iets mis. Foutcode: {resultaat.status_code}")
+
+elif not api_key:
+    st.info("Voer je API key in aan de linkerkant om te beginnen.")
