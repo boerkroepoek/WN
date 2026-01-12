@@ -1,48 +1,46 @@
+import streamlit as st
 import requests
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from google.colab import userdata
 
-# Input .
-locatie = input('Locatie: ')
+# SL layout pagina
+st.set_page_config(page_title="Weer App", page_icon="⛅")
+st.title("⛅ Weersvoorspelling")
+locatie = st.text_input('Kies een locatie')
+st.write('Het weer voor', locatie)
 
+# API code
+#api_code = userdata.get('api_weer')
+api_code = 'd26fba7aea29fb5a6cb8d3074a2bfa3c'
 
-# API gegevens.
-api_code = userdata.get('api_weer') #veilige api code
-api_url = f'http://api.openweathermap.org/data/2.5/forecast?q={locatie}&units=metric&appid={api_code}'
+if locatie:
+  api_url = f'http://api.openweathermap.org/data/2.5/forecast?q={locatie}&units=metric&appid={api_code}'
+  resultaat = requests.get(api_url)
+  if resultaat.status_code == 200:
+    data = resultaat.json()
 
-# Ophalen gegevens van OpenWeatherMap API.
-resultaat = requests.get(api_url)
-
-#Check of de verbinding met de api succesvol is.
-if resultaat.status_code == 200:
-    # Omzetten van Json naar pandas DF
-    df_weer = pd.json_normalize(resultaat.json()['list'])
-
-    # Omzetten van unix naar datums
-    df_weer['utc_datetime'] = pd.to_datetime(df_weer['dt_txt'], utc=True)
-    df_weer.set_index('utc_datetime', inplace=True)
-    # Temperatuur strings omzetten naar integers
+    # Data verwerken
+    df_weer = pd.json_normalize(data['list'])
+    df_weer['dt_txt'] = pd.to_datetime(df_weer['dt_txt'])
     df_weer['main.temp'] = pd.to_numeric(df_weer['main.temp'], errors='coerce')
 
-    # Grafiek plotten
-    grafiek = plt.plot(df_weer.index,df_weer['main.temp'])
-    #grafiek = ax.plot(df_weer['utc_datetime'], df_weer['main.temp'], marker='o', linestyle='-')
+    # --- Grafiek maken ---
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(df_weer['dt_txt'], df_weer['main.temp'], marker='o', linestyle='-', color='#1f77b4')
 
-    # Assen van de grafiek formatteren
-    ax = plt.gca()
-    ax.set_ylabel('temperatuur [°]')
-    ax.set_xlabel('datum')
-    ax.tick_params(axis='x', rotation=75)
-    ax.set_title(f'Temperatuur in {locatie}')
+    # Opmaak
+    ax.set_ylabel('Temperatuur [°C]')
+    ax.set_xlabel('Tijd')
+    ax.set_title(f'Temperatuurverloop in {locatie.capitalize()}')
+    ax.grid(True, linestyle='--', alpha=0.5)
 
+    # Datums formatteren
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%u'))
+    plt.xticks(rotation=45)
+    plt.tight_layout()
 
-    print(grafiek)
-    plt.show()
-else:
-    #Verbinding is niet gelukt :( fout melding geven en app afsluiten.
-    print(f'Weer bericht niet gevonden voor {locatie}')
-    exit()
-
-print(resultaat.json())
+    # Toon grafiek
+    st.pyplot(fig)
+  else: 
+    st.exit()
