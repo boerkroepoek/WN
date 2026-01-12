@@ -10,37 +10,4 @@ st.title("⛅ Weersvoorspelling")
 locatie = st.text_input('Kies een locatie')
 st.write('Het weer voor', locatie)
 
-# API code
-#api_code = userdata.get('api_weer')
-api_code = 'd26fba7aea29fb5a6cb8d3074a2bfa3c'
 
-if locatie:
-  api_url = f'http://api.openweathermap.org/data/2.5/forecast?q={locatie}&units=metric&appid={api_code}'
-  resultaat = requests.get(api_url)
-  if resultaat.status_code == 200:
-    data = resultaat.json()
-
-    # Data verwerken
-    df_weer = pd.json_normalize(data['list'])
-    df_weer['dt_txt'] = pd.to_datetime(df_weer['dt_txt'])
-    df_weer['main.temp'] = pd.to_numeric(df_weer['main.temp'], errors='coerce')
-
-    # --- Grafiek maken ---
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(df_weer['dt_txt'], df_weer['main.temp'], marker='o', linestyle='-', color='#1f77b4')
-
-    # Opmaak
-    ax.set_ylabel('Temperatuur [°C]')
-    ax.set_xlabel('Tijd')
-    ax.set_title(f'Temperatuurverloop in {locatie.capitalize()}')
-    ax.grid(True, linestyle='--', alpha=0.5)
-
-    # Datums formatteren
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%u'))
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-
-    # Toon grafiek
-    st.pyplot(fig)
-  else: 
-    st.exit()
