@@ -1,118 +1,92 @@
-import docx
-import openpyxl
-import re
-from pathlib import Path  # Gebruik pathlib voor modern padbeheer
-from openpyxl.styles import Font
+import streamlit as st
+import tempfile
+from pathlib import Path
+from geolib.models.dstability.dstability_model import DStabilityModel
 
-def haal_tekst_uit_word(docx_pad):
-    """
-    Haalt alle tekst uit een .docx-bestand, inclusief paragrafen en tabellen.
-    """
-    try:
-        doc = docx.Document(docx_pad)
-        volledige_tekst = []
+# --- Pagina Instellingen ---
+st.set_page_config(page_title="D-Stability Spiegel App", page_icon="🪞")
+st.title("🪞 D-Stability Spiegel Tool")
+st.write("Upload een `.stix` bestand. Deze app spiegelt automatisch de hele geometrie (inclusief alle achterliggende waterlijnen en scenario's) om de Y-as.")
 
-        # Haal tekst uit paragrafen
-        for para in doc.paragraphs:
-            volledige_tekst.append(para.text)
-
-        # Haal tekst uit tabellen
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for para in cell.paragraphs:
-                        volledige_tekst.append(para.text)
-                        
-        return "\n".join(volledige_tekst)
-
-    except Exception as e:
-        print(f"Fout bij het lezen van het Word-bestand: {e}")
-        return None
-
-def vind_woorden_tussen_haken(tekst):
-    """
-    Vindt alle tekststrings die tussen { } staan met behulp van regex.
-    """
-    # AANPASSING: De (.*?) is vervangen door .*?
-    # Dit zorgt ervoor dat de regex de VOLLEDIGE match pakt (incl. haken),
-    # in plaats van alleen de 'capturing group' (de tekst ertussen).
-    # re.DOTALL zorgt dat het ook werkt als de term over meerdere regels staat.
-    patroon = re.compile(r'\{.*?\}', re.DOTALL)
-    gevonden_woorden = re.findall(patroon, tekst)
-    
-    # We hoeven .strip() niet meer te doen, we willen de volledige match.
-    return gevonden_woorden
-
-def schrijf_naar_excel(termen_lijst, excel_pad):
-    """
-    Schrijft de gevonden unieke termen naar een Excel-bestand in één kolom.
-    """
-    try:
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Gevonden Termen"
-
-        # AANPASSING: Header-tekst verduidelijkt.
-        ws["A1"] = "Gevonden Term"
-        ws["A1"].font = Font(bold=True)
-        ws["B1"] = "input"
-        ws["B1"].font = Font(bold=True)
-
-        for index, term in enumerate(termen_lijst, start=2):
-            ws[f"A{index}"] = term
-
-        ws.column_dimensions['A'].width = 50
-        wb.save(excel_pad)
-        print(f"Excel-bestand succesvol opgeslagen als: {excel_pad}")
-
-    except PermissionError:
-        print(f"\nFOUT: Kan niet schrijven naar {excel_pad}.")
-        print("Het bestand is mogelijk al geopend in Excel. Sluit het en probeer opnieuw.")
-    except Exception as e:
-        print(f"Fout bij het schrijven naar het Excel-bestand: {e}")
-
-def verwerk_document(word_invoer_pad):
-    """
-    Hoofdfunctie om het hele proces te doorlopen.
-    """
-    invoer_pad = Path(word_invoer_pad)
-
-    print(f"1. Bezig met lezen van: {invoer_pad.name}")
-    document_tekst = haal_tekst_uit_word(invoer_pad)
-
-    if document_tekst:
-        print("2. Tekst geëxtraheerd. Bezig met zoeken naar termen (inclusief {})...")
-        gevonden_termen = vind_woorden_tussen_haken(document_tekst)
+# --- De Recursieve Spiegel Functie ---
+def spiegel_alles_recursief(obj, bezocht=None):
+    if bezocht is None:
+        bezocht = set()
         
-        if not gevonden_termen:
-            print("Geen termen tussen {} gevonden.")
-            return
-
-        print(f"   ... {len(gevonden_termen)} instanties gevonden.")
-
-        unieke_termen = list(dict.fromkeys(gevonden_termen))
-        print(f"   ... {len(unieke_termen)} unieke termen gevonden.")
-
-        basis_naam = invoer_pad.stem
-        excel_uitvoer = invoer_pad.parent / f"{basis_naam}_termen.xlsx"
-
-        print(f"3. Bezig met schrijven naar: {excel_uitvoer}")
-        schrijf_naar_excel(unieke_termen, excel_uitvoer)
-        
-        print("\nVerwerking voltooid!")
-
-# --- HOE TE GEBRUIKEN ---
-if __name__ == "__main__":
-    pad_input = input("Voer het volledige pad naar het Word (.docx) bestand in: ")
-    pad_input = pad_input.strip().strip('"').strip("'")
+    if id(obj) in bezocht:
+        return 0
+    bezocht.add(id(obj))
     
-    word_pad = Path(pad_input)
+    # Lijsten en Dictionaries doorlopen
+    if isinstance(obj, list):
+        return sum(spiegel_alles_recursief(item, bezocht) for item in obj)
+    if isinstance(obj, dict):
+        return sum(spiegel_alles_recursief(val, bezocht) for val in obj.values())
 
-    if not word_pad.exists():
-        print(f"Fout: Kan het bestand niet vinden op het opgegeven pad:")
-        print(f"{word_pad}")
-        print("Controleer het pad en probeer het opnieuw.")
-    elif word_pad.suffix.lower() != '.docx':
-        print(f"Fout: Het opgegeven bestand is geen .docx bestand (eindigt niet op .docx).")
-    else:
-        verwerk_document(word_pad)
+    aantal = 0
+    if hasattr(obj, '__dict__') or hasattr(obj, '__fields__'):
+        
+        # 1. Spiegel de X-coördinaten en grid-parameters
+        for attr in ['X', 'x', 'XLeft', 'XRight']:
+            if hasattr(obj, attr):
+                waarde = getattr(obj, attr)
+                if isinstance(waarde, (int, float)):
+                    setattr(obj, attr, -waarde)
+                    if attr in ['X', 'x']: 
+                        aantal += 1
+
+        # 2. Draai de lijsten om (voorkomt binnenstebuiten polygonen)
+        for list_name in ['Points', 'points', 'PointIds', 'pointids']:
+            if hasattr(obj, list_name):
+                lst = getattr(obj, list_name)
+                if isinstance(lst, list):
+                    lst.reverse()
+                    
+        # 3. Graaf dieper in alle andere attributen
+        for attr in dir(obj):
+            if not attr.startswith('_'):
+                try:
+                    val = getattr(obj, attr)
+                    if not callable(val):
+                        aantal += spiegel_alles_recursief(val, bezocht)
+                except Exception:
+                    pass
+                    
+    return aantal
+
+# --- File Uploader ---
+st.markdown("---")
+uploaded_file = st.file_uploader("Kies jouw D-Stability bestand", type=["stix"])
+
+if uploaded_file:
+    nieuwe_naam = uploaded_file.name.replace(".stix", "_GESPIEGELD.stix")
+    
+    with st.spinner("Bestand aan het analyseren en spiegelen..."):
+        
+        # Creëer een tijdelijke werkmap die zichzelf na afloop automatisch opruimt
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_pad = Path(tmp_dir) / uploaded_file.name
+            output_pad = Path(tmp_dir) / nieuwe_naam
+            
+            # Sla de upload fysiek op in de tijdelijke map
+            input_pad.write_bytes(uploaded_file.getvalue())
+
+            try:
+                # 1. Inladen, 2. Spiegelen, 3. Opslaan
+                dm = DStabilityModel()
+                dm.parse(input_pad)
+                totaal_aangepast = spiegel_alles_recursief(dm.datastructure)
+                dm.serialize(output_pad)
+                
+                # Succesmelding en Download Knop
+                st.success(f"✅ Gelukt! Er zijn {totaal_aangepast} datapunten gevonden en gespiegeld.")
+                
+                st.download_button(
+                    label="📥 Download Gespiegelde .stix",
+                    data=output_pad.read_bytes(),
+                    file_name=nieuwe_naam,
+                    mime="application/octet-stream"
+                )
+
+            except Exception as e:
+                st.error(f"Er is een fout opgetreden bij het verwerken: {e}")
