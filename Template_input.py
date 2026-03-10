@@ -9,50 +9,50 @@ st.title("🪞 D-Stability Spiegel Tool")
 st.write("Upload een `.stix` bestand. Deze app spiegelt automatisch de hele geometrie (inclusief alle achterliggende waterlijnen en scenario's) om de Y-as.")
 
 # --- De Recursieve Spiegel Functie ---
-def spiegel_alles_recursief(obj, bezocht=None):
-    if bezocht is None:
-        bezocht = set()
+# def spiegel_alles_recursief(obj, bezocht=None):
+#     if bezocht is None:
+#         bezocht = set()
         
-    if id(obj) in bezocht:
-        return 0
-    bezocht.add(id(obj))
+#     if id(obj) in bezocht:
+#         return 0
+#     bezocht.add(id(obj))
     
-    # Lijsten en Dictionaries doorlopen
-    if isinstance(obj, list):
-        return sum(spiegel_alles_recursief(item, bezocht) for item in obj)
-    if isinstance(obj, dict):
-        return sum(spiegel_alles_recursief(val, bezocht) for val in obj.values())
+#     # Lijsten en Dictionaries doorlopen
+#     if isinstance(obj, list):
+#         return sum(spiegel_alles_recursief(item, bezocht) for item in obj)
+#     if isinstance(obj, dict):
+#         return sum(spiegel_alles_recursief(val, bezocht) for val in obj.values())
 
-    aantal = 0
-    if hasattr(obj, '__dict__') or hasattr(obj, '__fields__'):
+#     aantal = 0
+#     if hasattr(obj, '__dict__') or hasattr(obj, '__fields__'):
         
-        # 1. Spiegel de X-coördinaten en grid-parameters
-        for attr in ['X', 'x', 'XLeft', 'XRight']:
-            if hasattr(obj, attr):
-                waarde = getattr(obj, attr)
-                if isinstance(waarde, (int, float)):
-                    setattr(obj, attr, -waarde)
-                    if attr in ['X', 'x']: 
-                        aantal += 1
+#         # 1. Spiegel de X-coördinaten en grid-parameters
+#         for attr in ['X', 'x', 'XLeft', 'XRight']:
+#             if hasattr(obj, attr):
+#                 waarde = getattr(obj, attr)
+#                 if isinstance(waarde, (int, float)):
+#                     setattr(obj, attr, -waarde)
+#                     if attr in ['X', 'x']: 
+#                         aantal += 1
 
-        # 2. Draai de lijsten om (voorkomt binnenstebuiten polygonen)
-        for list_name in ['Points', 'points', 'PointIds', 'pointids']:
-            if hasattr(obj, list_name):
-                lst = getattr(obj, list_name)
-                if isinstance(lst, list):
-                    lst.reverse()
+#         # 2. Draai de lijsten om (voorkomt binnenstebuiten polygonen)
+#         for list_name in ['Points', 'points', 'PointIds', 'pointids']:
+#             if hasattr(obj, list_name):
+#                 lst = getattr(obj, list_name)
+#                 if isinstance(lst, list):
+#                     lst.reverse()
                     
-        # 3. Graaf dieper in alle andere attributen
-        for attr in dir(obj):
-            if not attr.startswith('_'):
-                try:
-                    val = getattr(obj, attr)
-                    if not callable(val):
-                        aantal += spiegel_alles_recursief(val, bezocht)
-                except Exception:
-                    pass
+#         # 3. Graaf dieper in alle andere attributen
+#         for attr in dir(obj):
+#             if not attr.startswith('_'):
+#                 try:
+#                     val = getattr(obj, attr)
+#                     if not callable(val):
+#                         aantal += spiegel_alles_recursief(val, bezocht)
+#                 except Exception:
+#                     pass
                     
-    return aantal
+#     return aantal
 
 # --- File Uploader ---
 st.markdown("---")
@@ -90,3 +90,4 @@ if uploaded_file:
 
             except Exception as e:
                 st.error(f"Er is een fout opgetreden bij het verwerken: {e}")
+
