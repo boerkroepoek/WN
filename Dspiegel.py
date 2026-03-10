@@ -1,5 +1,5 @@
 import streamlit as st
-import tempfile
+#import tempfile
 from pathlib import Path
 from geolib.models.dstability.dstability_model import DStabilityModel
 
