@@ -4,3 +4,4 @@ PyPDF2
 pandas
 matplotlib
 fpdf2
+d-geolib
