@@ -855,7 +855,8 @@ def build_documents_from_uploads(
 
 def render_title_editors(
     documents: Sequence[PdfDocument],
-) -> list"""
+) -> list:
+    """
     Toon per document een titelveld.
 
     Args:
