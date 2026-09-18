@@ -1,8 +1,8 @@
-streamlit
 PyPDF2
-pandas
-matplotlib
-fpdf2
 d-geolib
 pypdf>=5.0,<7.0
 reportlab>=4.2,<5.0
+streamlit>=1.40,<2.0 
+pandas>=2.1,<3.0 
+matplotlib>=3.8,<4.0 
+fpdf2>=2.8,<3.0
