@@ -1,7 +1,8 @@
 streamlit
-reportlab
 PyPDF2
 pandas
 matplotlib
 fpdf2
 d-geolib
+pypdf>=5.0,<7.0
+reportlab>=4.2,<5.0
